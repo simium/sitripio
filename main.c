@@ -52,6 +52,7 @@ enum gps_fields {GPS_ID = 0,
 
 void gpio_callback(uint gpio, uint32_t events) {
     gps_pulses_in++;
+    printf("%d\r\n", gps_pulses_in);
 }
 
 // RX interrupt handler
@@ -159,9 +160,9 @@ int main() {
 
     while (1)
     {
-        if (gps_pulses_in > 5)
+        if (gps_pulses_in >= 30)
         {
-            printf("5 seconds passed\r\n");
+            printf("30 good GPS RXd\r\n");
             gps_pulses_in = 0;
         }
 
@@ -174,7 +175,7 @@ int main() {
             if (strncmp(&gps_print_data[3], "GGA", 3) == 0) {
                 parse_comma_delimited_str(gps_print_data, gps_field, 20);
                 
-#ifdef SITRIPIO_DBG
+//#ifdef SITRIPIO_DBG
                 printf("UTC Time  :%s\r\n", gps_field[GPS_TIME]);
                 printf("Latitude  :%s\r\n", gps_field[GPS_LATITUDE]);
                 printf("N/S       :%s\r\n", gps_field[GPS_LATITUDE_NS]);
@@ -182,51 +183,61 @@ int main() {
                 printf("E/W       :%s\r\n", gps_field[GPS_LONGITUDE_WE]);
                 printf("Altitude  :%s\r\n", gps_field[GPS_ALTITUDE]);
                 printf("Satellites:%s\r\n", gps_field[GPS_NUM_SATS]);
-#endif
+//#endif
                 char *p;
-                int HHMMSSmmm, utc_hhmmss, utc_milliseconds, utc_ms_scale = 0;
-                int latitude, lat_DDmm, lat_mm, lat_mm_scale = 0;
-                int longitude, lon_DDmm, lon_mm, lon_mm_scale = 0;
+                int utc_hh, utc_mm, utc_ss, utc_milliseconds, utc_ms_scale = 0;
+                int latitude, lat_DD, lat_mm1, lat_mm2, lat_mm_scale = 0;
+                int longitude, lon_DD, lon_mm1, lon_mm2, lon_mm_scale = 0;
                 int altitude, alt_m, alt_cm, alt_cm_scale = 0;
                 int pow_scale;
+                float latitude_f, lat_mm_f;
+                float longitude_f, lon_mm_f;
 
                 if ( (p=strchr(gps_field[GPS_TIME], '.' )) != NULL ) {
-                    sscanf( gps_field[GPS_TIME], "%d.%d", &utc_hhmmss, &utc_milliseconds );
+                    sscanf( gps_field[GPS_TIME], "%02d%02d%02d.%d", &utc_hh, &utc_mm, &utc_ss, &utc_milliseconds );
                     utc_ms_scale = strlen( p+1 );
 
                     pow_scale = quick_pow10(utc_ms_scale);
-                    HHMMSSmmm = utc_hhmmss*pow_scale + utc_milliseconds;
+                    //HHMMSSmmm = utc_hhmmss*pow_scale + utc_milliseconds;
 
-                    printf("HHMMSSmmm  :%d\r\n", HHMMSSmmm);
+                    printf("HHMMSS.mmm = %02d:%02d:%02d.%d\r\n", utc_hh, utc_mm, utc_ss, utc_milliseconds);
                 }
 
                 if ( (p=strchr(gps_field[GPS_LATITUDE], '.' )) != NULL ) {
-                    sscanf( gps_field[GPS_LATITUDE], "%d.%d", &lat_DDmm, &lat_mm );
+                    sscanf( gps_field[GPS_LATITUDE], "%02d%02d.%d", &lat_DD, &lat_mm1, &lat_mm2);
                     lat_mm_scale = strlen( p+1 );
 
                     pow_scale = quick_pow10(lat_mm_scale);
-                    latitude = lat_DDmm*pow_scale + lat_mm;
+                    lat_mm_f = (float)lat_mm1 + (float)(lat_mm2)/pow_scale;
+
+                    latitude_f = (float)(lat_DD) + lat_mm_f/60.0;
 
                     if (gps_field[GPS_LATITUDE_NS][0] == 'S')
-                        latitude = -latitude;
+                        latitude_f = -latitude_f;
 
-                    printf("LATITUDE  :%d\r\n", latitude);
+                    latitude = (int)(latitude_f*1000000.0);
+
+                    printf("LATITUDE  :%d \r\n", latitude);
 
                     memcpy(&lora_payload[lora_payload_p], &latitude, sizeof(latitude));
                     lora_payload_p += sizeof(latitude);
                 }
 
                 if ( (p=strchr(gps_field[GPS_LONGITUDE], '.' )) != NULL ) {
-                    sscanf( gps_field[GPS_LONGITUDE], "%d.%d", &lon_DDmm, &lon_mm );
+                    sscanf( gps_field[GPS_LONGITUDE], "%03d%02d.%d", &lon_DD, &lon_mm1, &lon_mm2);
                     lon_mm_scale = strlen( p+1 );
 
                     pow_scale = quick_pow10(lon_mm_scale);
-                    longitude = lon_DDmm*pow_scale + lon_mm;
+                    lon_mm_f = (float)lon_mm1 + (float)(lon_mm2)/pow_scale;
 
-                    printf("LONGITUDE :%d\r\n", longitude);
+                    longitude_f = (float)(lon_DD) + lon_mm_f/60.0;
 
                     if (gps_field[GPS_LONGITUDE_WE][0] == 'W')
-                        longitude = -longitude;
+                        longitude_f = -longitude_f;
+
+                    longitude = (int)(longitude_f*1000000.0);
+
+                    printf("LONGITUDE :%d\r\n", longitude);
 
                     memcpy(&lora_payload[lora_payload_p], &longitude, sizeof(longitude));
                     lora_payload_p += sizeof(longitude);
@@ -235,9 +246,6 @@ int main() {
                 if ( (p=strchr(gps_field[GPS_ALTITUDE], '.' )) != NULL ) {
                     sscanf( gps_field[GPS_ALTITUDE], "%d.%d", &alt_m, &alt_cm );
                     lat_mm_scale = strlen( p+1 );
-                    // printf("LAT DDmm     :%d\r\n",alt_m);
-                    // printf("LAT mm       :%d\r\n",alt_cm);
-                    // printf("LAT mm scale :%d\r\n",alt_cm_scale);
 
                     pow_scale = quick_pow10(alt_cm_scale);
                     altitude = alt_m*pow_scale + alt_cm;
@@ -250,7 +258,7 @@ int main() {
 
                 for (int i = 0; i < lora_payload_p; i++)
                 {
-                    printf("0x%02X ", lora_payload[i]);
+                    printf("%02X ", lora_payload[i]);
                 }
                 printf("\r\n");
             }

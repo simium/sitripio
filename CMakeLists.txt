@@ -3,7 +3,7 @@ add_executable(sitripio
         )
 
 # pull in common dependencies and additional uart hardware support
-target_link_libraries(sitripio pico_stdlib hardware_uart)
+target_link_libraries(sitripio pico_stdlib hardware_uart hardware_gpio)
 
 # enable usb output, enable uart output
 pico_enable_stdio_usb(sitripio 1)

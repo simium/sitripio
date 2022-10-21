@@ -29,6 +29,7 @@
 
 static volatile int gps_raw_end = false;
 static volatile int gps_print_available = false;
+static volatile int gps_pulses_in = 0;
 static int gps_chars_rx = 0;
 
 #define BUF_SIZE 100
@@ -46,6 +47,10 @@ enum gps_fields {GPS_ID = 0,
                 GPS_HDOP,
                 GPS_ALTITUDE,
                 GPS_GEOID_HEIGHT}; 
+
+void gpio_callback(uint gpio, uint32_t events) {
+    gps_pulses_in++;
+}
 
 // RX interrupt handler
 void on_uart_rx() {
@@ -118,6 +123,8 @@ void setup()
 
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
+
+    gpio_set_irq_enabled_with_callback(6, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
 }
 
 void parse_comma_delimited_str(char *string, char **fields, int max_fields)
@@ -143,13 +150,24 @@ int quick_pow10(int n)
 
 int main() {
     char *gps_field[20];
+    char lora_payload[20];
+    int lora_payload_p;
 
     setup();
 
     while (1)
     {
+        if (gps_pulses_in > 5)
+        {
+            printf("5 seconds passed\r\n");
+            gps_pulses_in = 0;
+        }
+
         if (gps_print_available)
         {
+            memset(lora_payload, 0, 20);
+            lora_payload_p = 0;
+
             gpio_put(LED_PIN, 1);
             if (strncmp(&gps_print_data[3], "GGA", 3) == 0) {
                 parse_comma_delimited_str(gps_print_data, gps_field, 20);
@@ -191,6 +209,9 @@ int main() {
                         latitude = -latitude;
 
                     printf("LATITUDE  :%d\r\n", latitude);
+
+                    memcpy(&lora_payload[lora_payload_p], &latitude, sizeof(latitude));
+                    lora_payload_p += sizeof(latitude);
                 }
 
                 if ( (p=strchr(gps_field[GPS_LONGITUDE], '.' )) != NULL ) {
@@ -204,6 +225,9 @@ int main() {
 
                     if (gps_field[GPS_LONGITUDE_WE][0] == 'W')
                         longitude = -longitude;
+
+                    memcpy(&lora_payload[lora_payload_p], &longitude, sizeof(longitude));
+                    lora_payload_p += sizeof(longitude);
                 }
 
                 if ( (p=strchr(gps_field[GPS_ALTITUDE], '.' )) != NULL ) {
@@ -217,9 +241,16 @@ int main() {
                     altitude = alt_m*pow_scale + alt_cm;
 
                     printf("ALTITUDE  :%d\r\n", altitude);
+
+                    memcpy(&lora_payload[lora_payload_p], &altitude, sizeof(altitude));
+                    lora_payload_p += sizeof(altitude);
                 }
 
-                printf("sizeof(int) = %d\r\n", sizeof(int));
+                for (int i = 0; i < lora_payload_p; i++)
+                {
+                    printf("0x%02X ", lora_payload[i]);
+                }
+                printf("\r\n");
             }
             gpio_put(LED_PIN, 0);
             gps_print_available = false;

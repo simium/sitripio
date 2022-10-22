@@ -13,6 +13,14 @@
 #include "hardware/irq.h"
 #include "hardware/gpio.h"
 
+#include "hardware/adc.h"
+#include "hardware/gpio.h"
+
+#include "pico/stdlib.h"
+#include "pico/lorawan.h"
+
+// edit with LoRaWAN Node Region and OTAA settings 
+#include "lorawan_config.h"
 
 /// \tag::uart_advanced[]
 
@@ -32,6 +40,7 @@
 static volatile int gps_raw_end = false;
 static volatile int gps_print_available = false;
 static volatile int gps_pulses_in = 0;
+static volatile int can_tx_data = false;
 static int gps_chars_rx = 0;
 
 #define BUF_SIZE 100
@@ -49,6 +58,60 @@ enum gps_fields {GPS_ID = 0,
                 GPS_HDOP,
                 GPS_ALTITUDE,
                 GPS_GEOID_HEIGHT}; 
+
+// pin configuration for SX1276 radio module
+const struct lorawan_sx1276_settings sx1276_settings = {
+    .spi = {
+        .inst = PICO_DEFAULT_SPI_INSTANCE,
+        .mosi = PICO_DEFAULT_SPI_TX_PIN,
+        .miso = PICO_DEFAULT_SPI_RX_PIN,
+        .sck  = PICO_DEFAULT_SPI_SCK_PIN,
+        .nss  = 8
+    },
+    .reset = 9,
+    .dio0  = 7,
+    .dio1  = 10
+};
+
+// ABP settings
+const struct lorawan_abp_settings abp_settings = {
+    .device_address = LORAWAN_DEV_ADDR,
+    .network_session_key = LORAWAN_NETWORK_SESSION_KEY,
+    .app_session_key = LORAWAN_APP_SESSION_KEY,
+    .channel_mask = LORAWAN_CHANNEL_MASK
+};
+
+// variables for receiving data
+int receive_length = 0;
+uint8_t receive_buffer[242];
+uint8_t receive_port = 0;
+
+// functions used in main
+void internal_temperature_init()
+{
+    adc_init();
+    adc_set_temp_sensor_enabled(true);
+    adc_select_input(4);
+}
+
+float internal_temperature_get()
+{
+    const float v_ref = 3.3;
+
+    // select and read the ADC
+    adc_select_input(4);
+    uint16_t adc_raw = adc_read();
+
+    // convert the raw ADC value to a voltage
+    float adc_voltage = adc_raw * v_ref / 4095.0f;
+
+    // convert voltage to temperature, using the formula from 
+    // section 4.9.4 in the RP2040 datasheet
+    //   https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
+    float adc_temperature = 27.0 - ((adc_voltage - 0.706) / 0.001721);
+
+    return adc_temperature;
+}
 
 void gpio_callback(uint gpio, uint32_t events) {
     gps_pulses_in++;
@@ -89,6 +152,27 @@ void setup()
 
     // Setup USB UART
     stdio_usb_init();
+
+    // initialize the LoRaWAN stack
+    printf("Initilizating LoRaWAN ... ");
+    if (lorawan_init_abp(&sx1276_settings, LORAWAN_REGION, &abp_settings) < 0) {
+        printf("failed!!!\n");
+        while (1) {
+            tight_loop_contents();
+        }
+    } else {
+        printf("success!\n");
+    }
+
+    // Start the join process and wait
+    printf("Joining LoRaWAN network ...");
+    lorawan_join();
+
+    while (!lorawan_is_joined()) {
+        lorawan_process_timeout_ms(1000);
+        printf(".");
+    }
+    printf(" joined successfully!\n");
     
     // Set up our UART with a basic baud rate.
     uart_init(UART_ID, BAUD_RATE);
@@ -128,6 +212,8 @@ void setup()
     gpio_set_dir(LED_PIN, GPIO_OUT);
 
     gpio_set_irq_enabled_with_callback(6, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
+
+    internal_temperature_init();
 }
 
 void parse_comma_delimited_str(char *string, char **fields, int max_fields)
@@ -158,12 +244,25 @@ int main() {
 
     setup();
 
+    // send payload
+    const char* message = "Hello, Sitripio!";
+
+    // try to send an unconfirmed uplink message
+    printf("sending unconfirmed message '%s' ... ", message);
+    if (lorawan_send_unconfirmed(message, strlen(message), 2) < 0) {
+        printf("failed!!!\n");
+    } else {
+        printf("success!\n");
+    }
+
     while (1)
     {
         if (gps_pulses_in >= 30)
         {
             printf("30 good GPS RXd\r\n");
             gps_pulses_in = 0;
+            can_tx_data = true;
+            gpio_put(LED_PIN, 1);
         }
 
         if (gps_print_available)
@@ -171,11 +270,10 @@ int main() {
             memset(lora_payload, 0, 20);
             lora_payload_p = 0;
 
-            gpio_put(LED_PIN, 1);
             if (strncmp(&gps_print_data[3], "GGA", 3) == 0) {
                 parse_comma_delimited_str(gps_print_data, gps_field, 20);
                 
-//#ifdef SITRIPIO_DBG
+#ifdef SITRIPIO_DBG
                 printf("UTC Time  :%s\r\n", gps_field[GPS_TIME]);
                 printf("Latitude  :%s\r\n", gps_field[GPS_LATITUDE]);
                 printf("N/S       :%s\r\n", gps_field[GPS_LATITUDE_NS]);
@@ -183,7 +281,7 @@ int main() {
                 printf("E/W       :%s\r\n", gps_field[GPS_LONGITUDE_WE]);
                 printf("Altitude  :%s\r\n", gps_field[GPS_ALTITUDE]);
                 printf("Satellites:%s\r\n", gps_field[GPS_NUM_SATS]);
-//#endif
+#endif
                 char *p;
                 int utc_hh, utc_mm, utc_ss, utc_milliseconds, utc_ms_scale = 0;
                 int latitude, lat_DD, lat_mm1, lat_mm2, lat_mm_scale = 0;
@@ -217,8 +315,6 @@ int main() {
 
                     latitude = (int)(latitude_f*1000000.0);
 
-                    printf("LATITUDE  :%d \r\n", latitude);
-
                     memcpy(&lora_payload[lora_payload_p], &latitude, sizeof(latitude));
                     lora_payload_p += sizeof(latitude);
                 }
@@ -237,8 +333,6 @@ int main() {
 
                     longitude = (int)(longitude_f*1000000.0);
 
-                    printf("LONGITUDE :%d\r\n", longitude);
-
                     memcpy(&lora_payload[lora_payload_p], &longitude, sizeof(longitude));
                     lora_payload_p += sizeof(longitude);
                 }
@@ -250,19 +344,38 @@ int main() {
                     pow_scale = quick_pow10(alt_cm_scale);
                     altitude = alt_m*pow_scale + alt_cm;
 
-                    printf("ALTITUDE  :%d\r\n", altitude);
-
                     memcpy(&lora_payload[lora_payload_p], &altitude, sizeof(altitude));
                     lora_payload_p += sizeof(altitude);
                 }
 
-                for (int i = 0; i < lora_payload_p; i++)
                 {
-                    printf("%02X ", lora_payload[i]);
+                    // get the internal temperature
+                    int8_t adc_temperature_byte = internal_temperature_get();
+
+                    memcpy(&lora_payload[lora_payload_p], &adc_temperature_byte, sizeof(adc_temperature_byte));
+                    lora_payload_p += sizeof(adc_temperature_byte);
                 }
-                printf("\r\n");
+                
+                if (can_tx_data)
+                {
+                    // send payload
+                    if (lorawan_send_unconfirmed(lora_payload, lora_payload_p, 2) < 0) {
+                        printf("TX failed!!!\n");
+                    } else {
+                        printf("TX success!\n");
+                    }
+
+#ifdef SITRIPIO_DBG
+                    for (int i = 0; i < lora_payload_p; i++)
+                    {
+                        printf("%02X ", lora_payload[i]);
+                    }
+                    printf("\r\n");
+#endif
+                    can_tx_data = false;
+                    gpio_put(LED_PIN, 0);
+                }
             }
-            gpio_put(LED_PIN, 0);
             gps_print_available = false;
         }
     }

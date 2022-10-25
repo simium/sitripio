@@ -10,13 +10,13 @@
 #define LORAWAN_REGION                  LORAMAC_REGION_EU868
 
 // LoRaWAN device address (32-bit)
-#define LORAWAN_DEV_ADDR                "260BC91B"
+#define LORAWAN_DEV_ADDR                "00000000"
 
 // LoRaWAN Network Session Key (128-bit)
-#define LORAWAN_NETWORK_SESSION_KEY     "BA3D42D57D5B3E3BC76A91878DD22BD8"
+#define LORAWAN_NETWORK_SESSION_KEY     "00000000000000000000000000000000"
 
 // LoRaWAN Application Session Key (128-bit)
-#define LORAWAN_APP_SESSION_KEY         "9BAD9CF40133CC07C058B35B60EFB499"
+#define LORAWAN_APP_SESSION_KEY         "00000000000000000000000000000000"
 
 // LoRaWAN Channel Mask, NULL value will use the default channel mask 
 // for the region

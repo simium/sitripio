@@ -42,6 +42,7 @@ static volatile int gps_print_available = false;
 static volatile int gps_pulses_in = 0;
 static volatile int can_tx_data = false;
 static int gps_chars_rx = 0;
+static int debug_tx = 0;
 
 #define BUF_SIZE 100
 static char gps_raw_data[BUF_SIZE];
@@ -115,7 +116,7 @@ float internal_temperature_get()
 
 void gpio_callback(uint gpio, uint32_t events) {
     gps_pulses_in++;
-    printf("%d\r\n", gps_pulses_in);
+    //printf("%d\r\n", gps_pulses_in);
 }
 
 // RX interrupt handler
@@ -164,7 +165,7 @@ void setup()
         printf("success!\n");
     }
 
-    // Start the join process and wait
+    //Start the join process and wait
     printf("Joining LoRaWAN network ...");
     lorawan_join();
 
@@ -245,24 +246,33 @@ int main() {
     setup();
 
     // send payload
-    const char* message = "Hello, Sitripio!";
-
-    // try to send an unconfirmed uplink message
-    printf("sending unconfirmed message '%s' ... ", message);
-    if (lorawan_send_unconfirmed(message, strlen(message), 2) < 0) {
-        printf("failed!!!\n");
-    } else {
-        printf("success!\n");
-    }
+    const char* message = "C3POALIVE";
 
     while (1)
     {
+        lorawan_process();
+
         if (gps_pulses_in >= 30)
         {
             printf("30 good GPS RXd\r\n");
             gps_pulses_in = 0;
             can_tx_data = true;
             gpio_put(LED_PIN, 1);
+
+            debug_tx++;
+        }
+
+        if (debug_tx>=10)
+        {
+            // try to send an unconfirmed uplink message
+            printf("sending unconfirmed message '%s' ... ", message);
+            if (lorawan_send_unconfirmed(message, strlen(message), 2) < 0) {
+                printf("Ping::OK\n");
+            } else {
+                printf("Ping::KO\n");
+            }
+
+            debug_tx = 0;
         }
 
         if (gps_print_available)
@@ -273,7 +283,7 @@ int main() {
             if (strncmp(&gps_print_data[3], "GGA", 3) == 0) {
                 parse_comma_delimited_str(gps_print_data, gps_field, 20);
                 
-#ifdef SITRIPIO_DBG
+#if 1
                 printf("UTC Time  :%s\r\n", gps_field[GPS_TIME]);
                 printf("Latitude  :%s\r\n", gps_field[GPS_LATITUDE]);
                 printf("N/S       :%s\r\n", gps_field[GPS_LATITUDE_NS]);
@@ -298,7 +308,7 @@ int main() {
                     pow_scale = quick_pow10(utc_ms_scale);
                     //HHMMSSmmm = utc_hhmmss*pow_scale + utc_milliseconds;
 
-                    printf("HHMMSS.mmm = %02d:%02d:%02d.%d\r\n", utc_hh, utc_mm, utc_ss, utc_milliseconds);
+                    //printf("HHMMSS.mmm = %02d:%02d:%02d.%d\r\n", utc_hh, utc_mm, utc_ss, utc_milliseconds);
                 }
 
                 if ( (p=strchr(gps_field[GPS_LATITUDE], '.' )) != NULL ) {
@@ -365,7 +375,7 @@ int main() {
                         printf("TX success!\n");
                     }
 
-#ifdef SITRIPIO_DBG
+#if 1
                     for (int i = 0; i < lora_payload_p; i++)
                     {
                         printf("%02X ", lora_payload[i]);
